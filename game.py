@@ -22,6 +22,14 @@ screen_size = int(default_screen_size[0] * radio), int(default_screen_size[1] * 
 
 sqrt3 = math.sqrt(3)
 
+offset_y = (default_screen_size[0] - boarder_size[0]) // 2
+offset_x = (default_screen_size[1] - boarder_size[1]) // 2
+offset_ball_x = offset_x + boarder_size[1] * 0.6
+offset_ball_y = offset_y + boarder_size[0] / 2
+
+def clamp(x, low, high):
+    return max(min(x, high), low)
+
 class CollisionType:
     CUE_BALL = 0
     POLE = 1
@@ -30,8 +38,10 @@ class CollisionType:
     OTHERS = 100
 
 class State:
-    IDLE = 0
-    WAIT = 1
+    IDLE = 1
+    WAIT = 2
+    PLACE = 4
+    WAIT_MOUSE = 8
 
 class Component:
     def __init__(self, parent: 'Component' = None) -> None:
@@ -81,19 +91,12 @@ class Ball(Component):
         self.init_pos = pos
         self.body.position = pos
         parent.space.add(self.body, self.circle)
-
-        if ball_id == 15:
-            self.circle.collision_type = CollisionType.CUE_BALL
-        else:
-            self.circle.collision_type = CollisionType.BALL
+        self.circle.collision_type = CollisionType.BALL
         self.ball_id = ball_id
     
     def draw(self, buffer):
-        color = [(255,0,0), (255,255,255)]
-        if self.ball_id == 15:
-            color.reverse()
-        cv2.circle(buffer, (self.pos.int_tuple), int(self.circle.radius), color[0],-1)
-        cv2.putText(buffer, str(self.ball_id), (self.pos - (20,0)).int_tuple, cv2.FONT_HERSHEY_PLAIN, 2, color[1])
+        cv2.circle(buffer, (self.pos.int_tuple), int(self.circle.radius), (255,0,0),-1)
+        cv2.putText(buffer, str(self.ball_id), (self.pos - (20,0)).int_tuple, cv2.FONT_HERSHEY_PLAIN, 2, (255,255,255))
     
     @property
     def pos(self) -> pm.Vec2d:
@@ -109,8 +112,41 @@ class Ball(Component):
             self.body.velocity *= (vec.length - 0.5) / vec.length
 
     def reset(self):
-        self.body.velocity *= 0
         self.body.position = self.init_pos
+        self.body.velocity = 0, 0
+        
+class CueBall(Ball):
+    def __init__(self, ball_id, pos: tuple[float, float] = (0, 0), parent: 'GameBoard' = None) -> None:
+        super().__init__(ball_id, pos, parent)
+        self.circle.collision_type = CollisionType.CUE_BALL
+        self.mouse = 0,0
+
+    def draw(self, buffer):
+        cv2.circle(buffer, (self.pos.int_tuple), int(self.circle.radius), (255,255,255),-1)
+        cv2.putText(buffer, str(self.ball_id), (self.pos - (20,0)).int_tuple, cv2.FONT_HERSHEY_PLAIN, 2, (255,0,0))
+    
+    def reset(self):
+        self.parent.state |= State.PLACE
+        super().reset()
+    
+    def update(self):
+        if self.parent.state & State.WAIT_MOUSE:
+            if self.body.position.get_distance(self.mouse) > ball_size * 3:
+                self.parent.state &= ~State.WAIT_MOUSE
+        return super().update()
+
+    def on_mouse(self, x: int, y: int, flags: int) -> bool:
+        self.mouse = x, y
+        if self.parent.state & State.PLACE:
+            self.body.position = clamp(x, offset_x + ball_size * 2, offset_x + unit * 8 - ball_size * 2), clamp(y, offset_y + ball_size * 2, offset_y + unit * 4 - ball_size * 2)
+            self.body.velocity = 0, 0
+            if flags != 1 or (self.parent.state & State.IDLE) == 0:
+                return
+            for ball in self.parent.balls[1:]:
+                if ball.body.position.get_distance((x, y)) < ball_size * 2.1:
+                    return
+            self.parent.state &= ~State.PLACE
+
 
 class Pole(Component):
     def __init__(self, pos: tuple[float, float] = (0, 0), parent: 'GameBoard' = None) -> None:
@@ -126,7 +162,7 @@ class Pole(Component):
         self.shoot = False
 
     def draw(self, buffer):
-        if self.parent.state != State.IDLE:
+        if self.parent.state & State.IDLE == 0 or self.parent.state & (State.PLACE | State.WAIT_MOUSE):
             return
         verts = []
         for v in [(0,0), (0.005*unit, 0.025*unit), (0.001 * unit, 0.05*unit), (-800, 0.075*unit), (-800, -0.075*unit)]:
@@ -157,6 +193,7 @@ class Boarder(Component):
         self.shape.elasticity = 1
         parent.space.add(self.shape)
         self.rotation = rotate
+        self.shape.collision_type = CollisionType.OTHERS
     
     def draw(self, buffer):
         cv2.polylines(buffer, [np.array([i.int_tuple for i in self.shape.get_vertices()], np.int32)], True, (0,255,0), 5)
@@ -164,12 +201,10 @@ class Boarder(Component):
 class Boarder4(Boarder):
     def __init__(self, position, rotate, parent: 'GameBoard' = None) -> None:
         super().__init__(position, rotate, boarder4_length, parent)
-        self.shape.collision_type = CollisionType.OTHERS
 
 class Boarder2(Boarder):
     def __init__(self, position, rotate, parent: 'GameBoard' = None) -> None:
         super().__init__(position, rotate, boarder2_length, parent)
-        self.shape.collision_type = CollisionType.OTHERS
 
 class OuterBoarder(Component):
     def __init__(self, parent: 'GameBoard' = None) -> None:
@@ -191,7 +226,7 @@ class Hole(Component):
         super().__init__(parent)
         self.body = pm.Body(body_type=pm.Body.STATIC)
 
-        self.circle = pm.Circle(self.body, corner_pocket_size / 2)
+        self.circle = pm.Circle(self.body, corner_pocket_size / 1.5)
         self.body.position = position
         parent.space.add(self.body, self.circle)
 
@@ -210,7 +245,7 @@ class GameBoard(Component):
         cv2.setMouseCallback(name, self.on_mouse)
         cv2.setWindowProperty(name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         self.running = True
-        self.mouse_pos = (0,0)
+        self.mouse = None
 
         self.space = pm.Space()
         self.space.gravity = (0,0)
@@ -223,23 +258,19 @@ class GameBoard(Component):
         self.build()
 
     def build(self):
-        offset_y = (default_screen_size[0] - boarder_size[0]) // 2
-        offset_x = (default_screen_size[1] - boarder_size[1]) // 2
         Boarder4((offset_x + boarder4_length + corner_pocket_size + mid_pocket_size * 2, offset_y - boarder_thickness), 0, self) #右上
         Boarder4((offset_x + corner_pocket_size, offset_y - boarder_thickness), 0, self) #左上
         Boarder2((offset_x - boarder_thickness, (boarder2_length + corner_pocket_size + offset_y)), 1.5, self) #左
         Boarder4((offset_x + corner_pocket_size + boarder4_length, boarder2_length + corner_pocket_size * 2 + offset_y+boarder_thickness),1,self) #左下
         Boarder4((offset_x + boarder4_length * 2 + corner_pocket_size + mid_pocket_size * 2, boarder2_length + corner_pocket_size * 2 + offset_y+boarder_thickness),1,self) #右下
         Boarder2((offset_x + unit*8 + boarder_thickness, corner_pocket_size + offset_y),0.5,self) #右
-        Hole((offset_x + boarder4_length + corner_pocket_size + mid_pocket_size, offset_y),self) #上
-        Hole((offset_x, offset_y),self) #左上
-        Hole((offset_x, offset_y + boarder2_length + corner_pocket_size * 2),self) #左下
-        Hole((offset_x + boarder4_length + corner_pocket_size + mid_pocket_size, offset_y + boarder2_length + corner_pocket_size * 2),self) #下
-        Hole((offset_x + unit*8, offset_y + boarder2_length + corner_pocket_size * 2),self) #右下
-        Hole((offset_x + unit*8, offset_y),self) #右上
-        offset_ball_x = offset_x + boarder_size[1] * 0.6
-        offset_ball_y = offset_y + boarder_size[0] / 2
-        self.cue_ball = Ball(15, (offset_ball_x - unit * 3.5, offset_ball_y),self)
+        Hole((offset_x + boarder4_length + corner_pocket_size + mid_pocket_size, offset_y - ball_size * 3),self) #上
+        Hole((offset_x - ball_size, offset_y - ball_size),self) #左上
+        Hole((offset_x - ball_size, offset_y + boarder2_length + corner_pocket_size * 2 + ball_size),self) #左下
+        Hole((offset_x + boarder4_length + corner_pocket_size + mid_pocket_size, offset_y + boarder2_length + corner_pocket_size * 2 + ball_size * 3),self) #下
+        Hole((offset_x + unit*8 + ball_size, offset_y + boarder2_length + corner_pocket_size * 2 + ball_size),self) #右下
+        Hole((offset_x + unit*8 + ball_size, offset_y - ball_size),self) #右上
+        self.cue_ball = CueBall(15, (offset_ball_x - unit * 3.5, offset_ball_y),self)
         self.balls.append(self.cue_ball)
         
         i = 0
@@ -254,17 +285,25 @@ class GameBoard(Component):
         OuterBoarder(self)
 
         def pre_solve(arb: pm.Arbiter, space: pm.Space, data):
+            if self.state & State.PLACE:
+                return False
+            return True
+            
+        handler = self.space.add_collision_handler(CollisionType.BALL, CollisionType.CUE_BALL)
+        handler.pre_solve = pre_solve
+
+        def pre_solve(arb: pm.Arbiter, space: pm.Space, data):
             return False
             
         handler = self.space.add_collision_handler(CollisionType.BALL, CollisionType.POLE)
         handler.pre_solve = pre_solve
 
         def pre_solve(arb: pm.Arbiter, space: pm.Space, data):
-            if arb.contact_point_set.points[0].distance < -ball_size:
+            if arb.contact_point_set.points[0].distance < -ball_size * 0.5:
+                shape = arb.shapes[0]
                 for ball in self.balls:
-                    for shape in arb.shapes:
-                        if ball.circle == shape:
-                            ball.reset()
+                    if ball.circle == shape:
+                        ball.reset()
             return False
             
         handler = self.space.add_collision_handler(CollisionType.BALL, CollisionType.HOLE)
@@ -273,8 +312,9 @@ class GameBoard(Component):
         handler.pre_solve = pre_solve
 
         def pre_solve(arb: pm.Arbiter, space: pm.Space, data):
-            if self.state == State.IDLE:
-                self.state = State.WAIT
+            if self.state & State.IDLE and (self.state & (State.PLACE | State.WAIT_MOUSE)) == 0:
+                self.state &= ~State.IDLE
+                self.state |= State.WAIT | State.WAIT_MOUSE
                 return True
             return False
             
@@ -284,11 +324,8 @@ class GameBoard(Component):
         self.reset()
 
     def reset(self):
-        offset_y = (default_screen_size[0] - boarder_size[0]) // 2
-        offset_x = (default_screen_size[1] - boarder_size[1]) // 2
-        offset_ball_x = offset_x + boarder_size[1] * 0.6
-        offset_ball_y = offset_y + boarder_size[0] / 2
         self.balls[0].body.position = offset_ball_x - unit * 3.5, offset_ball_y
+        self.balls[0].body.velocity = 0, 0
         indices = [*range(0,15)]
         indices.remove(7)
         
@@ -304,14 +341,16 @@ class GameBoard(Component):
         for rows in range(5):
             for cols in range(rows+1):
                 pos = offset_ball_x + rows * sqrt3 * ball_size * 2.1 / 2, offset_ball_y + (cols - (rows)/2) * ball_size * 2.1
-                self.balls[indices[i]+1].body.position = pos
+                ball = self.balls[indices[i]+1]
+                ball.body.position = pos
+                ball.body.velocity *= 0
                 i+=1
 
     def get_cue_ball(self) -> Ball:
         return self.cue_ball
 
     def on_mouse(self, event, x: int, y: int, flags: int, *param) -> bool:
-        self.mouse_pos = x, y
+        self.mouse = x, y, flags, event
         for child in self.children:
             if child.on_mouse(x, y, flags):
                 break
@@ -319,7 +358,7 @@ class GameBoard(Component):
     
     def draw(self, buffer):
         self.buf *= 0
-        cv2.putText(self.buf, str(self.mouse_pos), (10,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,0))
+        cv2.putText(self.buf, str(self.mouse), (10,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,0))
         if self.moving_ball:
             cv2.putText(self.buf, str(self.moving_ball.body.velocity), (200,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,0))
             pass
@@ -352,9 +391,8 @@ class GameBoard(Component):
                 self.moving_ball = ball
                 break
         else:
-            self.state = State.IDLE
-
-
+            self.state &= ~State.WAIT
+            self.state |= State.IDLE
 
 if __name__ == "__main__":
     board = GameBoard("test")
