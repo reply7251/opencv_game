@@ -26,6 +26,7 @@ class CollisionType:
     CUE_BALL = 0
     POLE = 1
     BALL = 2
+    HOLE = 3
     OTHERS = 100
 
 class State:
@@ -77,6 +78,7 @@ class Ball(Component):
         self.circle = pm.Circle(self.body, ball_size)
         self.circle.density = 1
         self.circle.elasticity = 1
+        self.init_pos = pos
         self.body.position = pos
         parent.space.add(self.body, self.circle)
 
@@ -106,7 +108,9 @@ class Ball(Component):
         if vec.length:
             self.body.velocity *= (vec.length - 0.5) / vec.length
 
-        pass
+    def reset(self):
+        self.body.velocity *= 0
+        self.body.position = self.init_pos
 
 class Pole(Component):
     def __init__(self, pos: tuple[float, float] = (0, 0), parent: 'GameBoard' = None) -> None:
@@ -182,6 +186,21 @@ class OuterBoarder(Component):
         for shape in self.shapes:
             cv2.line(buffer, shape._get_a().int_tuple, shape._get_b().int_tuple, (0,255,0), 5)
 
+class Hole(Component):
+    def __init__(self, position, parent: 'GameBoard' = None) -> None:
+        super().__init__(parent)
+        self.body = pm.Body(body_type=pm.Body.STATIC)
+
+        self.circle = pm.Circle(self.body, corner_pocket_size / 2)
+        self.body.position = position
+        parent.space.add(self.body, self.circle)
+
+        self.circle.collision_type = CollisionType.HOLE
+    
+    def draw(self, buffer):
+        cv2.circle(buffer, (self.body.position.int_tuple), int(self.circle.radius), (0,0,255),-1)
+
+
 class GameBoard(Component):
     def __init__(self, name: str) -> None:
         super().__init__()
@@ -212,6 +231,12 @@ class GameBoard(Component):
         Boarder4((offset_x + corner_pocket_size + boarder4_length, boarder2_length + corner_pocket_size * 2 + offset_y+boarder_thickness),1,self) #左下
         Boarder4((offset_x + boarder4_length * 2 + corner_pocket_size + mid_pocket_size * 2, boarder2_length + corner_pocket_size * 2 + offset_y+boarder_thickness),1,self) #右下
         Boarder2((offset_x + unit*8 + boarder_thickness, corner_pocket_size + offset_y),0.5,self) #右
+        Hole((offset_x + boarder4_length + corner_pocket_size + mid_pocket_size, offset_y),self) #上
+        Hole((offset_x, offset_y),self) #左上
+        Hole((offset_x, offset_y + boarder2_length + corner_pocket_size * 2),self) #左下
+        Hole((offset_x + boarder4_length + corner_pocket_size + mid_pocket_size, offset_y + boarder2_length + corner_pocket_size * 2),self) #下
+        Hole((offset_x + unit*8, offset_y + boarder2_length + corner_pocket_size * 2),self) #右下
+        Hole((offset_x + unit*8, offset_y),self) #右上
         offset_ball_x = offset_x + boarder_size[1] * 0.6
         offset_ball_y = offset_y + boarder_size[0] / 2
         self.cue_ball = Ball(15, (offset_ball_x - unit * 3.5, offset_ball_y),self)
@@ -220,7 +245,8 @@ class GameBoard(Component):
         i = 0
         for rows in range(5):
             for cols in range(rows+1):
-                pos = offset_ball_x + rows * sqrt3 * ball_size * 2.1 / 2, offset_ball_y + (cols - (rows)/2) * ball_size * 2.1
+                #pos = offset_ball_x + rows * sqrt3 * ball_size * 2.1 / 2, offset_ball_y + (cols - (rows)/2) * ball_size * 2.1
+                pos = i * ball_size * 2.1, 2000
                 self.balls.append(Ball(i , pos,self))
                 i+=1
 
@@ -231,6 +257,19 @@ class GameBoard(Component):
             return False
             
         handler = self.space.add_collision_handler(CollisionType.BALL, CollisionType.POLE)
+        handler.pre_solve = pre_solve
+
+        def pre_solve(arb: pm.Arbiter, space: pm.Space, data):
+            if arb.contact_point_set.points[0].distance < -ball_size:
+                for ball in self.balls:
+                    for shape in arb.shapes:
+                        if ball.circle == shape:
+                            ball.reset()
+            return False
+            
+        handler = self.space.add_collision_handler(CollisionType.BALL, CollisionType.HOLE)
+        handler.pre_solve = pre_solve
+        handler = self.space.add_collision_handler(CollisionType.CUE_BALL, CollisionType.HOLE)
         handler.pre_solve = pre_solve
 
         def pre_solve(arb: pm.Arbiter, space: pm.Space, data):
