@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 import pymunk as pm
 import math
-
+import random
 #127 254
 
 default_screen_size = (1080, 1920)
@@ -19,6 +19,8 @@ boarder2_length = unit*4 - corner_pocket_size * 2
 ball_size = int(boarder_size[1] / 45)
 
 screen_size = int(default_screen_size[0] * radio), int(default_screen_size[1] * radio)
+
+sqrt3 = math.sqrt(3)
 
 class CollisionType:
     CUE_BALL = 0
@@ -102,7 +104,7 @@ class Ball(Component):
     def update(self):
         vec:pm.Vec2d = self.body.velocity
         if vec.length:
-            self.body.velocity *= (vec.length - 0.3) / vec.length
+            self.body.velocity *= (vec.length - 0.5) / vec.length
 
         pass
 
@@ -147,7 +149,7 @@ class Boarder(Component):
     def __init__(self, position, rotate, length, parent: 'GameBoard' = None) -> None:
         super().__init__(parent)
         transform = pm.Transform.identity().translated(*position).rotated(math.pi * rotate)
-        self.shape = pm.Poly(parent.space.static_body, [(0,0),(length,0),(length, boarder_thickness),(0, boarder_thickness)], transform)
+        self.shape = pm.Poly(parent.space.static_body, [(0,0),(length,0),(length-boarder_thickness, boarder_thickness),(0+boarder_thickness, boarder_thickness)], transform)
         self.shape.elasticity = 1
         parent.space.add(self.shape)
         self.rotation = rotate
@@ -206,9 +208,9 @@ class GameBoard(Component):
         offset_x = (default_screen_size[1] - boarder_size[1]) // 2
         Boarder4((offset_x + boarder4_length + corner_pocket_size + mid_pocket_size * 2, offset_y - boarder_thickness), 0, self) #右上
         Boarder4((offset_x + corner_pocket_size, offset_y - boarder_thickness), 0, self) #左上
-        Boarder2((offset_x, corner_pocket_size + offset_y), 0.5, self) #左
-        Boarder4((offset_x + corner_pocket_size, boarder2_length + corner_pocket_size * 2 + offset_y),0,self) #左下
-        Boarder4((offset_x + boarder4_length + corner_pocket_size + mid_pocket_size * 2, boarder2_length + corner_pocket_size * 2 + offset_y),0,self) #右下
+        Boarder2((offset_x - boarder_thickness, (boarder2_length + corner_pocket_size + offset_y)), 1.5, self) #左
+        Boarder4((offset_x + corner_pocket_size + boarder4_length, boarder2_length + corner_pocket_size * 2 + offset_y+boarder_thickness),1,self) #左下
+        Boarder4((offset_x + boarder4_length * 2 + corner_pocket_size + mid_pocket_size * 2, boarder2_length + corner_pocket_size * 2 + offset_y+boarder_thickness),1,self) #右下
         Boarder2((offset_x + unit*8 + boarder_thickness, corner_pocket_size + offset_y),0.5,self) #右
         offset_ball_x = offset_x + boarder_size[1] * 0.6
         offset_ball_y = offset_y + boarder_size[0] / 2
@@ -216,7 +218,6 @@ class GameBoard(Component):
         self.balls.append(self.cue_ball)
         
         i = 0
-        sqrt3 = math.sqrt(3)
         for rows in range(5):
             for cols in range(rows+1):
                 pos = offset_ball_x + rows * sqrt3 * ball_size * 2.1 / 2, offset_ball_y + (cols - (rows)/2) * ball_size * 2.1
@@ -240,6 +241,32 @@ class GameBoard(Component):
             
         handler = self.space.add_collision_handler(CollisionType.CUE_BALL, CollisionType.POLE)
         handler.pre_solve = pre_solve
+        
+        self.reset()
+
+    def reset(self):
+        offset_y = (default_screen_size[0] - boarder_size[0]) // 2
+        offset_x = (default_screen_size[1] - boarder_size[1]) // 2
+        offset_ball_x = offset_x + boarder_size[1] * 0.6
+        offset_ball_y = offset_y + boarder_size[0] / 2
+        self.balls[0].body.position = offset_ball_x - unit * 3.5, offset_ball_y
+        indices = [*range(0,15)]
+        indices.remove(7)
+        
+        small = random.randint(0,6)
+        great = random.randint(8,14)
+        indices.remove(small)
+        indices.remove(great)
+        random.shuffle(indices)
+        indices.insert(4, 7)
+        indices.insert(10,small)
+        indices.append(great)
+        i = 0
+        for rows in range(5):
+            for cols in range(rows+1):
+                pos = offset_ball_x + rows * sqrt3 * ball_size * 2.1 / 2, offset_ball_y + (cols - (rows)/2) * ball_size * 2.1
+                self.balls[indices[i]+1].body.position = pos
+                i+=1
 
     def get_cue_ball(self) -> Ball:
         return self.cue_ball
@@ -268,14 +295,19 @@ class GameBoard(Component):
             self.draw(self.buf)
             buf = cv2.cvtColor(self.buf, cv2.COLOR_RGB2BGR)
             cv2.imshow(self.name, buf)
-            if cv2.waitKey(self.dt) & 0xff == 0x1b:
+            key = cv2.waitKey(self.dt)
+            if key & 0xff == 0x1b:
                 self.running = False
+            elif key == ord('r'):
+                self.reset()
+            elif key != -1:
+                print(key, chr(key))
         pass
 
     def update(self):
         super().update()
         for ball in self.balls:
-            if 0 < ball.body.velocity.length < 0.2:
+            if 0 < ball.body.velocity.length < 1:
                 ball.body.velocity *= 0
             if ball.body.velocity.length > 0:
                 self.moving_ball = ball
