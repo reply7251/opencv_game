@@ -11,8 +11,8 @@ unit = 220
 boarder_size = (unit * 4, unit * 8)
 radio = 1.0
 boarder_thickness = 30
-mid_pocket_size = 0.25 * unit # 中袋0.5 底袋0.45
-corner_pocket_size = unit * 0.45 / math.sqrt(2)
+mid_pocket_size = 0.22 * unit # 中袋0.5 底袋0.45
+corner_pocket_size = unit * 0.3 / math.sqrt(2)
 boarder4_length = unit*4 - mid_pocket_size - corner_pocket_size
 boarder2_length = unit*4 - corner_pocket_size * 2
 
@@ -42,6 +42,60 @@ class State:
     WAIT = 2
     PLACE = 4
     WAIT_MOUSE = 8
+
+img_folder = "./imgs/"
+img_balls = cv2.cvtColor(cv2.imread(img_folder + "ball.png", cv2.IMREAD_UNCHANGED), cv2.COLOR_RGBA2BGRA) 
+ball_height, ball_width = 56, 54375
+img_balls_splitted = [img_balls[:, x//1000:(x+ball_width)//1000 , : ] for x in range(0, img_balls.shape[1]*1000, ball_width)]
+img_cue = cv2.cvtColor(cv2.imread(img_folder + "cue2.png", cv2.IMREAD_UNCHANGED), cv2.COLOR_RGBA2BGRA)[:,3:]
+img_board = cv2.rotate(cv2.cvtColor(cv2.imread(img_folder + "background.png", cv2.IMREAD_UNCHANGED), cv2.COLOR_RGBA2BGRA), cv2.ROTATE_180) 
+
+class Images:
+    def ball(index : int) -> np.ndarray:
+        return img_balls_splitted[index]
+    
+    def cue() -> np.ndarray:
+        return img_cue
+    
+    def board() -> np.ndarray:
+        return img_board
+    
+    def rotate(img: np.ndarray, angle, center = None) -> np.ndarray:
+        h, w = img.shape[:2]
+        if center == None:
+            center = w//2, h//2
+        
+        M = cv2.getRotationMatrix2D(center, angle, 1.0)
+        cos = np.abs(M[0, 0])
+        sin = np.abs(M[0, 1])
+
+        nW = int((h * sin) + (w * cos))
+        nH = int((h * cos) + (w * sin))
+
+        M[0, 2] += (nW / 2) - center[0]
+        M[1, 2] += (nH / 2) - center[1]
+
+        return cv2.warpAffine(img, M, (nW, nH))
+    
+    def draw2(img: np.ndarray, buffer: np.ndarray, x, y, mask: np.ndarray = None):
+        if mask is None:
+            mask = np.zeros(img.shape[:2], np.uint8)
+        h, w = buffer.shape[:2]
+        mask = mask[max(0, -y):min(img.shape[0],h-y), max(0, -x):min(img.shape[1],w-x)]
+        img = img[max(0, -y):min(img.shape[0],h-y), max(0, -x):min(img.shape[1],w-x)]
+        y = max(y, 0)
+        x = max(x, 0)
+        cv2.copyTo(img, mask, buffer[y:y+img.shape[0],x:x+img.shape[1]])
+
+    def draw(img, buffer, pos, mask = None):
+        Images.draw2(img, buffer, *pos, mask)
+        pass
+
+class Math:
+    def rotate(x0, y0, x1, y1, rad):
+        x2 = ((x1 - x0) * math.cos(rad)) - ((y1 - y0) * math.sin(rad)) + x0
+        y2 = ((x1 - x0) * math.sin(rad)) + ((y1 - y0) * math.cos(rad)) + y0
+        return x2, y2
 
 class Component:
     def __init__(self, parent: 'Component' = None) -> None:
@@ -95,8 +149,11 @@ class Ball(Component):
         self.ball_id = ball_id
     
     def draw(self, buffer):
-        cv2.circle(buffer, (self.pos.int_tuple), int(self.circle.radius), (255,0,0),-1)
-        cv2.putText(buffer, str(self.ball_id), (self.pos - (20,0)).int_tuple, cv2.FONT_HERSHEY_PLAIN, 2, (255,255,255))
+        img = Images.ball(self.ball_id).copy()
+        buf = cv2.resize(img, (ball_size * 2, ball_size * 2))
+        img, alpha = buf[:,:,0:3], buf[:,:,3]
+        draw_pos = (self.pos-(ball_size,ball_size)).int_tuple
+        Images.draw(img, buffer, draw_pos, alpha)
     
     @property
     def pos(self) -> pm.Vec2d:
@@ -120,10 +177,6 @@ class CueBall(Ball):
         super().__init__(ball_id, pos, parent)
         self.circle.collision_type = CollisionType.CUE_BALL
         self.mouse = 0,0
-
-    def draw(self, buffer):
-        cv2.circle(buffer, (self.pos.int_tuple), int(self.circle.radius), (255,255,255),-1)
-        cv2.putText(buffer, str(self.ball_id), (self.pos - (20,0)).int_tuple, cv2.FONT_HERSHEY_PLAIN, 2, (255,0,0))
     
     def reset(self):
         self.parent.state |= State.PLACE
@@ -164,14 +217,26 @@ class Pole(Component):
     def draw(self, buffer):
         if self.parent.state & State.IDLE == 0 or self.parent.state & (State.PLACE | State.WAIT_MOUSE):
             return
-        verts = []
-        for v in [(0,0), (0.005*unit, 0.025*unit), (0.001 * unit, 0.05*unit), (-800, 0.075*unit), (-800, -0.075*unit)]:
-            v = pm.Vec2d(*v)
-            x = v.rotated(self.body.angle)[0] + self.body.position[0]
-            y = v.rotated(self.body.angle)[1] + self.body.position[1]
-            verts.append((int(0 if math.isnan(x) else x), int(0 if math.isnan(y) else y)))
-        cv2.polylines(buffer, [np.array(verts)], True, (0,255,0), 5)
-        #cv2.putText(buffer, str(self.body.angle), (200,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,0))
+        img = Images.cue()
+        pos: pm.Vec2d = self.body.position - (img.shape[0]/2, img.shape[0]/2)
+        angle = math.degrees(-self.body.angle)
+        
+        rad = -self.body.angle#math.radians(math.radians(angle))
+        point = pm.Vec2d(535, 0)
+        point = pm.Vec2d(point.x * math.cos(rad) - point.y * math.sin(rad), point.x * math.sin(rad) + point.y * math.cos(rad))
+        if -90 > angle > -180: #右上
+            pass #pm.Vec2d(point.x * math.cos(rad) - point.y * math.sin(rad), point.x * math.sin(rad) + point.y * math.cos(rad))
+        elif angle < -180: #右下
+            point = pm.Vec2d(point.x, -point.y)#point = pm.Vec2d(point.x * math.cos(rad) - point.y * math.sin(rad), -(point.x * math.sin(rad) + point.y * math.cos(rad)))
+        elif 0<angle < 90: #左下
+            point = pm.Vec2d(-point.x, -point.y)#point = pm.Vec2d(-(point.x * math.cos(rad) - point.y * math.sin(rad)), -(point.x * math.sin(rad) + point.y * math.cos(rad)))
+        else: #左上
+            point = pm.Vec2d(-point.x, point.y)#point = pm.Vec2d(-(point.x * math.cos(rad) - point.y * math.sin(rad)), (point.x * math.sin(rad) + point.y * math.cos(rad)))
+
+        img = Images.rotate(img, angle)
+        img, alpha = img[:,:,0:3], img[:,:,3]
+        Images.draw(img, buffer, (pos+point).int_tuple, alpha)
+
     
     def on_mouse(self, x: int, y: int, flags: int) -> bool:
         self.mouse = x, y
@@ -255,6 +320,9 @@ class GameBoard(Component):
         self.balls: list[Ball] = []
         self.moving_ball = None
 
+        self.scale = 1.25
+        self.pos = pm.Vec2d(-23,-2)
+
         self.build()
 
     def build(self):
@@ -264,10 +332,10 @@ class GameBoard(Component):
         Boarder4((offset_x + corner_pocket_size + boarder4_length, boarder2_length + corner_pocket_size * 2 + offset_y+boarder_thickness),1,self) #左下
         Boarder4((offset_x + boarder4_length * 2 + corner_pocket_size + mid_pocket_size * 2, boarder2_length + corner_pocket_size * 2 + offset_y+boarder_thickness),1,self) #右下
         Boarder2((offset_x + unit*8 + boarder_thickness, corner_pocket_size + offset_y),0.5,self) #右
-        Hole((offset_x + boarder4_length + corner_pocket_size + mid_pocket_size, offset_y - ball_size * 3),self) #上
+        Hole((offset_x + boarder4_length + corner_pocket_size + mid_pocket_size, offset_y - ball_size * 1.5),self) #上
         Hole((offset_x - ball_size, offset_y - ball_size),self) #左上
         Hole((offset_x - ball_size, offset_y + boarder2_length + corner_pocket_size * 2 + ball_size),self) #左下
-        Hole((offset_x + boarder4_length + corner_pocket_size + mid_pocket_size, offset_y + boarder2_length + corner_pocket_size * 2 + ball_size * 3),self) #下
+        Hole((offset_x + boarder4_length + corner_pocket_size + mid_pocket_size, offset_y + boarder2_length + corner_pocket_size * 2 + ball_size * 1.5),self) #下
         Hole((offset_x + unit*8 + ball_size, offset_y + boarder2_length + corner_pocket_size * 2 + ball_size),self) #右下
         Hole((offset_x + unit*8 + ball_size, offset_y - ball_size),self) #右上
         self.cue_ball = CueBall(15, (offset_ball_x - unit * 3.5, offset_ball_y),self)
@@ -281,7 +349,7 @@ class GameBoard(Component):
                 self.balls.append(Ball(i , pos,self))
                 i+=1
 
-        Pole((screen_size[1] / 2, screen_size[0] / 2), self)
+        self.pole = Pole((screen_size[1] / 2, screen_size[0] / 2), self)
         OuterBoarder(self)
 
         def pre_solve(arb: pm.Arbiter, space: pm.Space, data):
@@ -324,7 +392,7 @@ class GameBoard(Component):
         self.reset()
 
     def reset(self):
-        self.balls[0].body.position = offset_ball_x - unit * 3.5, offset_ball_y
+        self.balls[0].body.position = offset_ball_x - unit * 3 + corner_pocket_size, offset_ball_y
         self.balls[0].body.velocity = 0, 0
         indices = [*range(0,15)]
         indices.remove(7)
@@ -358,10 +426,12 @@ class GameBoard(Component):
     
     def draw(self, buffer):
         self.buf *= 0
-        cv2.putText(self.buf, str(self.mouse), (10,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,0))
-        if self.moving_ball:
-            cv2.putText(self.buf, str(self.moving_ball.body.velocity), (200,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,0))
-            pass
+        img = Images.board()
+        img = cv2.resize(img, (int(img.shape[1] * self.scale), int(img.shape[0] * self.scale)))
+        img, alpha = img[:,:,:3], img[:,:,3]
+        Images.draw(img, self.buf, self.pos.int_tuple, alpha)
+
+        cv2.putText(self.buf, str(self.mouse) + f"scale: {self.scale} pos: {self.pos}", (10,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,0))
         for child in self.children:
             child.draw(buffer)
 
@@ -373,13 +443,29 @@ class GameBoard(Component):
             self.draw(self.buf)
             buf = cv2.cvtColor(self.buf, cv2.COLOR_RGB2BGR)
             cv2.imshow(self.name, buf)
-            key = cv2.waitKey(self.dt)
+            key = cv2.waitKeyEx(self.dt)
             if key & 0xff == 0x1b:
                 self.running = False
-            elif key == ord('r'):
+            elif key & 0xff == ord('r'):
                 self.reset()
+            elif key & 0xff == ord(','):
+                self.scale += 0.01
+            elif key & 0xff == ord('.'):
+                self.scale -= 0.01
+            elif key % 0x10000 == 0:
+                key = key // 0x10000 
+                if key == 0x25:
+                    self.pos += (-1, 0)
+                elif key == 0x26:
+                    self.pos += (0, -1)
+                elif key == 0x27:
+                    self.pos += (1, 0)
+                elif key == 0x28:
+                    self.pos += (0, 1)
+                else:
+                    print("ex:",hex(key))
             elif key != -1:
-                print(key, chr(key))
+                print(key, chr(key & 0xff))
         pass
 
     def update(self):
