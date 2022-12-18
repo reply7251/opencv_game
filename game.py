@@ -6,6 +6,8 @@ import math
 import random
 #127 254
 
+debug = False
+
 default_screen_size = (1080, 1920)
 unit = 220
 boarder_size = (unit * 4, unit * 8)
@@ -186,7 +188,8 @@ class CueBall(Ball):
         if self.parent.state & State.WAIT_MOUSE:
             if self.body.position.get_distance(self.mouse) > ball_size * 3:
                 self.parent.state &= ~State.WAIT_MOUSE
-        return super().update()
+        else:
+            super().update()
 
     def on_mouse(self, x: int, y: int, flags: int) -> bool:
         self.mouse = x, y
@@ -261,7 +264,8 @@ class Boarder(Component):
         self.shape.collision_type = CollisionType.OTHERS
     
     def draw(self, buffer):
-        cv2.polylines(buffer, [np.array([i.int_tuple for i in self.shape.get_vertices()], np.int32)], True, (0,255,0), 5)
+        if debug:
+            cv2.polylines(buffer, [np.array([i.int_tuple for i in self.shape.get_vertices()], np.int32)], True, (0,255,0), 5)
 
 class Boarder4(Boarder):
     def __init__(self, position, rotate, parent: 'GameBoard' = None) -> None:
@@ -283,8 +287,9 @@ class OuterBoarder(Component):
         parent.space.add(self.body, *self.shapes)
     
     def draw(self, buffer):
-        for shape in self.shapes:
-            cv2.line(buffer, shape._get_a().int_tuple, shape._get_b().int_tuple, (0,255,0), 5)
+        if debug:
+            for shape in self.shapes:
+                cv2.line(buffer, shape._get_a().int_tuple, shape._get_b().int_tuple, (0,255,0), 5)
 
 class Hole(Component):
     def __init__(self, position, parent: 'GameBoard' = None) -> None:
@@ -298,7 +303,8 @@ class Hole(Component):
         self.circle.collision_type = CollisionType.HOLE
     
     def draw(self, buffer):
-        cv2.circle(buffer, (self.body.position.int_tuple), int(self.circle.radius), (0,0,255),-1)
+        if debug:
+            cv2.circle(buffer, (self.body.position.int_tuple), int(self.circle.radius), (0,0,255),-1)
 
 
 class GameBoard(Component):
@@ -430,8 +436,8 @@ class GameBoard(Component):
         img = cv2.resize(img, (int(img.shape[1] * self.scale), int(img.shape[0] * self.scale)))
         img, alpha = img[:,:,:3], img[:,:,3]
         Images.draw(img, self.buf, self.pos.int_tuple, alpha)
-
-        cv2.putText(self.buf, str(self.mouse) + f"scale: {self.scale} pos: {self.pos}", (10,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,0))
+        if debug:
+            cv2.putText(self.buf, str(self.mouse) + f"scale: {self.scale} pos: {self.pos}", (10,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,0))
         for child in self.children:
             child.draw(buffer)
 
@@ -448,11 +454,11 @@ class GameBoard(Component):
                 self.running = False
             elif key & 0xff == ord('r'):
                 self.reset()
-            elif key & 0xff == ord(','):
+            elif key & 0xff == ord(',') and debug:
                 self.scale += 0.01
-            elif key & 0xff == ord('.'):
+            elif key & 0xff == ord('.') and debug:
                 self.scale -= 0.01
-            elif key % 0x10000 == 0:
+            elif key % 0x10000 == 0 and debug:
                 key = key // 0x10000 
                 if key == 0x25:
                     self.pos += (-1, 0)
@@ -464,7 +470,7 @@ class GameBoard(Component):
                     self.pos += (0, 1)
                 else:
                     print("ex:",hex(key))
-            elif key != -1:
+            elif key != -1 and debug:
                 print(key, chr(key & 0xff))
         pass
 
