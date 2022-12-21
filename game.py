@@ -4,6 +4,7 @@ import numpy as np
 import pymunk as pm
 import math
 import random
+from typing import Callable
 #127 254
 
 debug = False
@@ -92,6 +93,9 @@ class Images:
     def draw(img, buffer, pos, mask = None):
         Images.draw2(img, buffer, *pos, mask)
         pass
+    
+    def text(text, buffer, pos, color = (0,0,0), size = 1):
+        cv2.putText(buffer, text, pos, cv2.FONT_HERSHEY_SIMPLEX, size, color, 2)
 
 class Math:
     def rotate(x0, y0, x1, y1, rad):
@@ -136,6 +140,69 @@ class Component:
     def reset(self):
         pass
 
+class Button(Component):
+    def __init__(self, parent: Component, x: int, y: int, width: int, height: int, label: str = "label", callback: Callable[[int,int,int], None] = None) -> None:
+        super().__init__(parent)
+        self.x, self.y, self.width, self.height = x, y, width, height
+        self.label = label
+        self.pressed = False
+        self.mouse_on = False
+        if callback == None:
+            callback = lambda x,y,flags: None
+        self.callback = callback
+        self.font_size = 1.5
+    
+    def inside(self, x: int, y: int) -> bool:
+        return self.x <= x <= self.right() and self.y <= y <= self.bottom()
+    
+    def bottom(self):
+        return self.y + self.height
+    
+    def right(self):
+        return self.x + self.width
+    
+    def center(self):
+        return (self.x + self.right()) // 2, (self.y + self.bottom()) // 2
+    
+    def on_mouse(self, x: int, y: int, flags: int) -> bool:
+        self.mouse_on = self.inside(x, y)
+        if self.mouse_on and self.pressed and flags == 0:
+            self.callback(x, y, flags)
+            return True
+        self.pressed = bool(flags)
+        return super().on_mouse(x, y, flags)
+
+    def draw(self, buffer):
+        Images.text(self.label, buffer, (self.x, self.center()[1]+int(self.font_size*10)), (255,0,0) if self.mouse_on else (0, 0, 0))
+
+class Logger(Component):
+    def __init__(self, parent: 'Component', x: int, y: int, line_limit = 10, last_time = 1000) -> None:
+        super().__init__(parent)
+        self.x, self.y = x, y
+        self.last_time, self.time_left = last_time, last_time
+        self.line_limit = line_limit
+        self.lines = []
+        self.time = 0
+
+    
+    def update(self):
+        self.time += 1
+        while self.lines and self.lines[0][1] < self.time:
+            self.lines.pop(0)
+        return super().update()
+    
+    def log(self, text: str):
+        self.lines.append((text, self.time + self.last_time))
+        if len(self.lines) > self.line_limit:
+            self.lines.pop(0)
+            self.time_left = self.last_time
+
+    def draw(self, buffer):
+        offset = 20
+        for line, _ in self.lines:
+            Images.text(line, buffer, (self.x, self.y + offset))
+            offset += 30
+
 class Ball(Component):
     def __init__(self, ball_id, pos: tuple[float, float] = (0, 0), parent: 'GameBoard' = None) -> None:
         super().__init__(parent)
@@ -173,6 +240,12 @@ class Ball(Component):
     def reset(self):
         self.body.position = self.init_pos
         self.body.velocity = 0, 0
+    
+    def __repr__(self) -> str:
+        return self.name()
+
+    def name(self):
+        return f"ball{self.ball_id+1}"
         
 class CueBall(Ball):
     def __init__(self, ball_id, pos: tuple[float, float] = (0, 0), parent: 'GameBoard' = None) -> None:
@@ -202,6 +275,9 @@ class CueBall(Ball):
                 if ball.body.position.get_distance((x, y)) < ball_size * 2.1:
                     return
             self.parent.state &= ~State.PLACE
+    
+    def name(self):
+        return "cue_ball"
 
 
 class Pole(Component):
@@ -331,6 +407,14 @@ class GameBoard(Component):
 
         self.build()
 
+        self.reset_btn = Button(self, 170,10,200,50,'reset', lambda x, y, flags:self.reset())
+        self.logger = Logger(self, 500, 10)
+    
+    def get_ball_from_shape(self, shape) -> Ball:
+        for ball in self.balls:
+            if ball.circle == shape:
+                return ball
+
     def build(self):
         Boarder4((offset_x + boarder4_length + corner_pocket_size + mid_pocket_size * 2, offset_y - boarder_thickness), 0, self) #右上
         Boarder4((offset_x + corner_pocket_size, offset_y - boarder_thickness), 0, self) #左上
@@ -361,9 +445,17 @@ class GameBoard(Component):
         def pre_solve(arb: pm.Arbiter, space: pm.Space, data):
             if self.state & State.PLACE:
                 return False
+            self.logger.log(f"{self.get_ball_from_shape(arb.shapes[0])} hits {self.get_ball_from_shape(arb.shapes[1])}")
             return True
             
         handler = self.space.add_collision_handler(CollisionType.BALL, CollisionType.CUE_BALL)
+        handler.pre_solve = pre_solve
+
+        def pre_solve(arb: pm.Arbiter, space: pm.Space, data):
+            self.logger.log(f"{self.get_ball_from_shape(arb.shapes[0])} hits {self.get_ball_from_shape(arb.shapes[1])}")
+            return True
+
+        handler = self.space.add_collision_handler(CollisionType.BALL, CollisionType.BALL)
         handler.pre_solve = pre_solve
 
         def pre_solve(arb: pm.Arbiter, space: pm.Space, data):
@@ -375,9 +467,7 @@ class GameBoard(Component):
         def pre_solve(arb: pm.Arbiter, space: pm.Space, data):
             if arb.contact_point_set.points[0].distance < -ball_size * 0.5:
                 shape = arb.shapes[0]
-                for ball in self.balls:
-                    if ball.circle == shape:
-                        ball.reset()
+                self.get_ball_from_shape(shape).reset()
             return False
             
         handler = self.space.add_collision_handler(CollisionType.BALL, CollisionType.HOLE)
@@ -437,7 +527,7 @@ class GameBoard(Component):
         img, alpha = img[:,:,:3], img[:,:,3]
         Images.draw(img, self.buf, self.pos.int_tuple, alpha)
         if debug:
-            cv2.putText(self.buf, str(self.mouse) + f"scale: {self.scale} pos: {self.pos}", (10,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,0))
+            Images.text(f"{self.mouse} scale: {self.scale} pos: {self.pos}", buffer, (10, 50), (255,0,0))
         for child in self.children:
             child.draw(buffer)
 
