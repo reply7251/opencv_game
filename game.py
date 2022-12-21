@@ -9,6 +9,10 @@ from typing import Callable
 
 debug = False
 
+def toggle_debug(*args, **kwargs):
+    global debug
+    debug = not debug
+
 default_screen_size = (1080, 1920)
 unit = 220
 boarder_size = (unit * 4, unit * 8)
@@ -151,6 +155,7 @@ class Button(Component):
             callback = lambda x,y,flags: None
         self.callback = callback
         self.font_size = 1.5
+        self.cool_down = 0
     
     def inside(self, x: int, y: int) -> bool:
         return self.x <= x <= self.right() and self.y <= y <= self.bottom()
@@ -166,17 +171,21 @@ class Button(Component):
     
     def on_mouse(self, x: int, y: int, flags: int) -> bool:
         self.mouse_on = self.inside(x, y)
-        if self.mouse_on and self.pressed and flags == 0:
+        if self.mouse_on and self.pressed and flags == 0 and self.cool_down < 0:
             self.callback(x, y, flags)
+            self.cool_down = 50
             return True
         self.pressed = bool(flags)
         return super().on_mouse(x, y, flags)
+    
+    def update(self):
+        self.cool_down -= 1
 
     def draw(self, buffer):
         Images.text(self.label, buffer, (self.x, self.center()[1]+int(self.font_size*10)), (255,0,0) if self.mouse_on else (0, 0, 0))
 
 class Logger(Component):
-    def __init__(self, parent: 'Component', x: int, y: int, line_limit = 10, last_time = 1000) -> None:
+    def __init__(self, parent: 'Component', x: int, y: int, line_limit = 10, last_time = 750) -> None:
         super().__init__(parent)
         self.x, self.y = x, y
         self.last_time, self.time_left = last_time, last_time
@@ -198,6 +207,8 @@ class Logger(Component):
             self.time_left = self.last_time
 
     def draw(self, buffer):
+        if not debug:
+            return
         offset = 20
         for line, _ in self.lines:
             Images.text(line, buffer, (self.x, self.y + offset))
@@ -407,7 +418,8 @@ class GameBoard(Component):
 
         self.build()
 
-        self.reset_btn = Button(self, 170,10,200,50,'reset', lambda x, y, flags:self.reset())
+        self.reset_btn = Button(self, 170,10,150,50,'reset', lambda x, y, flags:self.reset())
+        self.debug_btn = Button(self, 370,10,150,50,'debug', toggle_debug)
         self.logger = Logger(self, 500, 10)
     
     def get_ball_from_shape(self, shape) -> Ball:
@@ -527,7 +539,7 @@ class GameBoard(Component):
         img, alpha = img[:,:,:3], img[:,:,3]
         Images.draw(img, self.buf, self.pos.int_tuple, alpha)
         if debug:
-            Images.text(f"{self.mouse} scale: {self.scale} pos: {self.pos}", buffer, (10, 50), (255,0,0))
+            Images.text(f"{self.mouse} scale: {self.scale} pos: {self.pos}", buffer, (10, screen_size[0] - 15), (255,0,0))
         for child in self.children:
             child.draw(buffer)
 
@@ -560,8 +572,8 @@ class GameBoard(Component):
                     self.pos += (0, 1)
                 else:
                     print("ex:",hex(key))
-            elif key != -1 and debug:
-                print(key, chr(key & 0xff))
+            elif key != -1:
+                self.logger.log(f"key: {key} {chr(key & 0xff)}")
         pass
 
     def update(self):
