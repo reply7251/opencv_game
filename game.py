@@ -4,7 +4,7 @@ import numpy as np
 import pymunk as pm
 import math
 import random
-from typing import Callable
+from typing import Callable, List, Tuple
 #127 254
 
 debug = False
@@ -125,7 +125,7 @@ class Component:
     def __init__(self, parent: 'Component' = None) -> None:
         self._enabled = True
         self.parent = parent
-        self._children: list[Component] = []
+        self._children: List[Component] = []
         if parent != None:
             parent.children.append(self)
 
@@ -143,7 +143,7 @@ class Component:
         return False
     
     @property
-    def children(self) -> list['Component']:
+    def children(self) -> List['Component']:
         return self._children
 
     @property
@@ -228,7 +228,7 @@ class Logger(Component):
             offset += 30
 
 class Ball(Component):
-    def __init__(self, ball_id, pos: tuple[float, float] = (0, 0), parent: 'GameBoard' = None) -> None:
+    def __init__(self, ball_id, pos: Tuple[float, float] = (0, 0), parent: 'GameBoard' = None) -> None:
         super().__init__(parent)
 
         self.body = pm.Body()
@@ -275,7 +275,7 @@ class Ball(Component):
         return f"ball{self.ball_id+1}"
         
 class CueBall(Ball):
-    def __init__(self, ball_id, pos: tuple[float, float] = (0, 0), parent: 'GameBoard' = None) -> None:
+    def __init__(self, ball_id, pos: Tuple[float, float] = (0, 0), parent: 'GameBoard' = None) -> None:
         super().__init__(ball_id, pos, parent)
         self.circle.collision_type = CollisionType.CUE_BALL
         self.mouse = 0,0
@@ -309,7 +309,7 @@ class CueBall(Ball):
 
 
 class Pole(Component):
-    def __init__(self, pos: tuple[float, float] = (0, 0), parent: 'GameBoard' = None) -> None:
+    def __init__(self, pos: Tuple[float, float] = (0, 0), parent: 'GameBoard' = None) -> None:
         super().__init__(parent)
 
         self.body = pm.Body(body_type=pm.Body.KINEMATIC)
@@ -427,7 +427,7 @@ class GameBoard(Component):
         self.dt = 25
 
         self.state = State.IDLE
-        self.balls: list[Ball] = []
+        self.balls: List[Ball] = []
         self.moving_ball = None
 
         self.scale = 1.25
@@ -605,7 +605,7 @@ class GameBoard(Component):
             self.draw(self.buf)
             buf = cv2.cvtColor(self.buf, cv2.COLOR_RGB2BGR)
             cv2.imshow(self.name, buf)
-            key = cv2.waitKeyEx(15)
+            key = cv2.waitKeyEx(10)
             if key & 0xff == 0x1b:
                 self.running = False
             elif key & 0xff == ord('r'):
