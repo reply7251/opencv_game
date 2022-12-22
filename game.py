@@ -43,6 +43,7 @@ class GameState:
         self.scores = [0, 0]
         self.ball_in = False
         self.cue_ball_in = False
+        self.hit_ball = False
 
 
 game_state = GameState()
@@ -476,8 +477,9 @@ class GameBoard(Component):
             ball1, ball2 = [self.get_ball_from_shape(shape) for shape in arb.shapes]
             if self.state & State.PLACE:
                 return False
-            if (not ball1.enabled) or not ball2.enabled:
+            if not ball1.enabled or not ball2.enabled:
                 return False
+            game_state.hit_ball = True
             self.logger.log(f"{ball1} hits {ball2}")
             return True
             
@@ -643,8 +645,11 @@ class GameBoard(Component):
             if self.state != state_before:
                 if not game_state.ball_in or game_state.cue_ball_in:
                     game_state.shooter = 1 - game_state.shooter
+                if not game_state.hit_ball:
+                    self.get_cue_ball().reset()
                 game_state.ball_in = False
                 game_state.cue_ball_in = False
+                game_state.hit_ball = False
 
 if __name__ == "__main__":
     board = GameBoard("test")
