@@ -23,7 +23,7 @@ corner_pocket_size = unit * 0.3 / math.sqrt(2)
 boarder4_length = unit*4 - mid_pocket_size - corner_pocket_size
 boarder2_length = unit*4 - corner_pocket_size * 2
 
-ball_size = int(boarder_size[1] / 45)
+ball_size = int(boarder_size[1] / 50) # /45
 
 screen_size = int(default_screen_size[0] * radio), int(default_screen_size[1] * radio)
 
@@ -33,6 +33,19 @@ offset_y = (default_screen_size[0] - boarder_size[0]) // 2
 offset_x = (default_screen_size[1] - boarder_size[1]) // 2
 offset_ball_x = offset_x + boarder_size[1] * 0.6
 offset_ball_y = offset_y + boarder_size[0] / 2
+
+class GameState:
+    def __init__(self) -> None:
+        self.reset()
+    
+    def reset(self):
+        self.shooter = 0
+        self.scores = [0, 0]
+        self.ball_in = False
+        self.cue_ball_in = False
+
+
+game_state = GameState()
 
 def clamp(x, low, high):
     return max(min(x, high), low)
@@ -137,9 +150,8 @@ class Component:
         return self._enabled
     
     @enabled.setter
-    def set_enabled(self, enabled):
+    def enabled(self, enabled):
         self._enabled = enabled
-        self.update()
     
     def reset(self):
         pass
@@ -244,13 +256,16 @@ class Ball(Component):
         self.body.position = x, y
 
     def update(self):
+        if not self.enabled:
+            self.body.velocity *= 0
         vec:pm.Vec2d = self.body.velocity
         if vec.length:
-            self.body.velocity *= (vec.length - 0.5) / vec.length
+            self.body.velocity *= (vec.length - 1) / vec.length
 
     def reset(self):
         self.body.position = self.init_pos
         self.body.velocity = 0, 0
+        self.enabled = False
     
     def __repr__(self) -> str:
         return self.name()
@@ -269,9 +284,10 @@ class CueBall(Ball):
         super().reset()
     
     def update(self):
-        if self.parent.state & State.WAIT_MOUSE:
-            if self.body.position.get_distance(self.mouse) > ball_size * 3:
+        if (self.parent.state & (State.WAIT_MOUSE | State.PLACE | State.WAIT)) == State.WAIT_MOUSE:
+            if self.body.position.get_distance(self.mouse) > ball_size * 5:
                 self.parent.state &= ~State.WAIT_MOUSE
+                self.enabled = True
         else:
             super().update()
 
@@ -421,6 +437,8 @@ class GameBoard(Component):
         self.reset_btn = Button(self, 170,10,150,50,'reset', lambda x, y, flags:self.reset())
         self.debug_btn = Button(self, 370,10,150,50,'debug', toggle_debug)
         self.logger = Logger(self, 500, 10)
+
+        self.time = 0
     
     def get_ball_from_shape(self, shape) -> Ball:
         for ball in self.balls:
@@ -447,7 +465,7 @@ class GameBoard(Component):
         for rows in range(5):
             for cols in range(rows+1):
                 #pos = offset_ball_x + rows * sqrt3 * ball_size * 2.1 / 2, offset_ball_y + (cols - (rows)/2) * ball_size * 2.1
-                pos = i * ball_size * 2.1, 2000
+                pos = (i+1) * ball_size * 2.1, ball_size * 1.1
                 self.balls.append(Ball(i , pos,self))
                 i+=1
 
@@ -455,19 +473,32 @@ class GameBoard(Component):
         OuterBoarder(self)
 
         def pre_solve(arb: pm.Arbiter, space: pm.Space, data):
+            ball1, ball2 = [self.get_ball_from_shape(shape) for shape in arb.shapes]
             if self.state & State.PLACE:
                 return False
-            self.logger.log(f"{self.get_ball_from_shape(arb.shapes[0])} hits {self.get_ball_from_shape(arb.shapes[1])}")
+            if (not ball1.enabled) or not ball2.enabled:
+                return False
+            self.logger.log(f"{ball1} hits {ball2}")
             return True
             
         handler = self.space.add_collision_handler(CollisionType.BALL, CollisionType.CUE_BALL)
         handler.pre_solve = pre_solve
 
         def pre_solve(arb: pm.Arbiter, space: pm.Space, data):
-            self.logger.log(f"{self.get_ball_from_shape(arb.shapes[0])} hits {self.get_ball_from_shape(arb.shapes[1])}")
+            ball1, ball2 = [self.get_ball_from_shape(shape) for shape in arb.shapes]
+            if (not ball1.enabled) or not ball2.enabled:
+                return False
+            self.logger.log(f"{ball1} hits {ball2}")
             return True
 
         handler = self.space.add_collision_handler(CollisionType.BALL, CollisionType.BALL)
+        handler.pre_solve = pre_solve
+
+        def pre_solve(arb: pm.Arbiter, space: pm.Space, data):
+            ball = self.get_ball_from_shape(arb.shapes[0])
+            return ball.enabled
+
+        handler = self.space.add_collision_handler(CollisionType.BALL, CollisionType.OTHERS)
         handler.pre_solve = pre_solve
 
         def pre_solve(arb: pm.Arbiter, space: pm.Space, data):
@@ -477,9 +508,17 @@ class GameBoard(Component):
         handler.pre_solve = pre_solve
 
         def pre_solve(arb: pm.Arbiter, space: pm.Space, data):
+            ball = self.get_ball_from_shape(arb.shapes[0])
+            if not ball.enabled:
+                return False
             if arb.contact_point_set.points[0].distance < -ball_size * 0.5:
-                shape = arb.shapes[0]
-                self.get_ball_from_shape(shape).reset()
+                ball.reset()
+                if not isinstance(ball, CueBall):
+                    game_state.scores[game_state.shooter] += ball.ball_id + 1
+                    game_state.ball_in = True
+                else:
+                    game_state.cue_ball_in = True
+
             return False
             
         handler = self.space.add_collision_handler(CollisionType.BALL, CollisionType.HOLE)
@@ -488,7 +527,10 @@ class GameBoard(Component):
         handler.pre_solve = pre_solve
 
         def pre_solve(arb: pm.Arbiter, space: pm.Space, data):
-            if self.state & State.IDLE and (self.state & (State.PLACE | State.WAIT_MOUSE)) == 0:
+            if self.state & State.IDLE and (self.state & (State.PLACE | State.WAIT_MOUSE | State.WAIT)) == 0:
+                x,y = arb.shapes[1].body.position.int_tuple
+                if not (offset_x < x < screen_size[1] - offset_x and offset_y < y < screen_size[0] - offset_y):
+                    return False
                 self.state &= ~State.IDLE
                 self.state |= State.WAIT | State.WAIT_MOUSE
                 return True
@@ -520,7 +562,10 @@ class GameBoard(Component):
                 ball = self.balls[indices[i]+1]
                 ball.body.position = pos
                 ball.body.velocity *= 0
+                ball.enabled = True
                 i+=1
+
+        game_state.reset()
 
     def get_cue_ball(self) -> Ball:
         return self.cue_ball
@@ -540,18 +585,25 @@ class GameBoard(Component):
         Images.draw(img, self.buf, self.pos.int_tuple, alpha)
         if debug:
             Images.text(f"{self.mouse} scale: {self.scale} pos: {self.pos}", buffer, (10, screen_size[0] - 15), (255,0,0))
+
         for child in self.children:
             child.draw(buffer)
+        color_scores = [(0,0,0), (0,0,0)]
+        if 5 < self.time % 20 < 15:
+            color_scores[game_state.shooter] = (255,255,0)
+        Images.text(f"shooter1: {game_state.scores[0]}", buffer, (screen_size[1]//2-300, screen_size[0] - 15), color_scores[0])
+        Images.text(f"shooter2: {game_state.scores[1]}", buffer, (screen_size[1]//2+100, screen_size[0] - 15), color_scores[1])
 
     def mainloop(self):
         while self.running:
+            self.time += 1
             for _ in range(self.dt):
                 self.update()
                 self.space.step(0.001)
             self.draw(self.buf)
             buf = cv2.cvtColor(self.buf, cv2.COLOR_RGB2BGR)
             cv2.imshow(self.name, buf)
-            key = cv2.waitKeyEx(self.dt)
+            key = cv2.waitKeyEx(15)
             if key & 0xff == 0x1b:
                 self.running = False
             elif key & 0xff == ord('r'):
@@ -585,8 +637,14 @@ class GameBoard(Component):
                 self.moving_ball = ball
                 break
         else:
+            state_before = self.state
             self.state &= ~State.WAIT
             self.state |= State.IDLE
+            if self.state != state_before:
+                if not game_state.ball_in or game_state.cue_ball_in:
+                    game_state.shooter = 1 - game_state.shooter
+                game_state.ball_in = False
+                game_state.cue_ball_in = False
 
 if __name__ == "__main__":
     board = GameBoard("test")
